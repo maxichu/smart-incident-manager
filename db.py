@@ -28,6 +28,15 @@ def init_db():
         conn.execute("ALTER TABLE incidents ADD COLUMN category TEXT")
     except sqlite3.OperationalError:
         pass
+    # F6: add severity columns if missing
+    try:
+        conn.execute("ALTER TABLE incidents ADD COLUMN severity TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE incidents ADD COLUMN severity_score INTEGER")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -66,11 +75,22 @@ def update_category(incident_id, category):
     conn.close()
 
 
+# F6: persist severity level and numeric score
+def update_severity(incident_id, severity, score):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE incidents SET severity = ?, severity_score = ? WHERE id = ?",
+        (severity, score, incident_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def get_all_incidents():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, content, category, created_at FROM incidents ORDER BY created_at DESC"
+        "SELECT id, content, category, severity, created_at FROM incidents ORDER BY created_at DESC"
     ).fetchall()
     conn.close()
     results = []
@@ -87,7 +107,7 @@ def get_incident_by_id(incident_id):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT id, content, summary, category, created_at FROM incidents WHERE id = ?",
+        "SELECT id, content, summary, category, severity, severity_score, created_at FROM incidents WHERE id = ?",
         (incident_id,),
     ).fetchone()
     conn.close()

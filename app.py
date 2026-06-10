@@ -17,8 +17,6 @@ def summarize(text):
 
 
 # F5: keyword lists for incident classification.
-# Each category maps to a list of lowercase keywords matched against
-# the incident text. Score = count of keyword matches; highest wins.
 KEYWORDS = {
     "Network": [
         "vpn", "firewall", "dns", "router", "network", "connectivity",
@@ -48,9 +46,7 @@ KEYWORDS = {
 def classify(text):
     """
     Classify an incident into one of five categories via keyword scoring.
-    Input:  incident content string
-    Output: category name string (e.g. "Network")
-    Falls back to "Application" when no keyword matches.
+    Falls back to Others when no keyword matches.
     """
     lower = text.lower()
     scores = {cat: 0 for cat in KEYWORDS}
@@ -60,6 +56,40 @@ def classify(text):
                 scores[cat] += 1
     best = max(scores, key=scores.get)
     return best if scores[best] > 0 else "Others"
+
+
+# F6: severity keyword weights.
+# Each keyword maps to a numeric weight. Summed score mapped to level.
+SEVERITY_KEYWORDS = {
+    4: ["outage", "down", "breach", "data loss", "ransomware", "critical"],
+    3: ["unavailable", "timeout", "crash", "failure", "attack", "95%"],
+    2: ["slow", "degraded", "error", "issue", "warning"],
+    1: ["notice", "minor", "informational"],
+}
+
+
+def score_severity(text):
+    """
+    Score severity via weighted keyword matching.
+    Input:  incident content string
+    Output: (severity_level, score) tuple
+    Uses max-keyword-weight mapping per F6 test cases.
+    """
+    lower = text.lower()
+    max_weight = 0
+    for weight, words in SEVERITY_KEYWORDS.items():
+        for w in words:
+            if w in lower:
+                if weight > max_weight:
+                    max_weight = weight
+    if max_weight >= 4:
+        return ("Critical", max_weight)
+    elif max_weight == 3:
+        return ("High", max_weight)
+    elif max_weight == 2:
+        return ("Medium", max_weight)
+    else:
+        return ("Low", max_weight)
 
 
 st.title("Smart Incident Manager")
@@ -118,6 +148,10 @@ if st.button("Submit Incident"):
     # F5: classify and store category
     db.update_category(incident_id, classify(text))
 
+    # F6: score severity and store level + score
+    sev, score = score_severity(text)
+    db.update_severity(incident_id, sev, score)
+
     st.success(
         f"Incident #{incident_id} saved. "
         f"Text length: {len(text)} characters."
@@ -135,7 +169,8 @@ else:
     options = {}
     for inc in incidents:
         cat = inc.get("category") or "?"
-        label = f"#{inc['id']} | [{cat}] | {inc['created_at'][:19]} | {inc['preview']}..."
+        sev = inc.get("severity") or "?"
+        label = f"#{inc['id']} | [{cat}] [{sev}] | {inc['created_at'][:19]} | {inc['preview']}..."
         options[label] = inc['id']
 
     selected = st.selectbox(
@@ -148,9 +183,10 @@ else:
 
     if incident:
         cat = incident.get("category") or "?"
+        sev = incident.get("severity") or "?"
 
         st.caption(
-            f"Incident #{incident['id']} | [{cat}] | {incident['created_at']}"
+            f"Incident #{incident['id']} | [{cat}] [{sev}] | {incident['created_at']}"
         )
 
         # F4: display summary (generate for legacy incidents)
