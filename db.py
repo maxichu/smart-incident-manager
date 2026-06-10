@@ -23,6 +23,11 @@ def init_db():
         conn.execute("ALTER TABLE incidents ADD COLUMN summary TEXT")
     except sqlite3.OperationalError:
         pass
+    # F5: add category column if missing
+    try:
+        conn.execute("ALTER TABLE incidents ADD COLUMN category TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -50,11 +55,22 @@ def update_summary(incident_id, summary):
     conn.close()
 
 
+# F5: persist the classification result
+def update_category(incident_id, category):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE incidents SET category = ? WHERE id = ?",
+        (category, incident_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def get_all_incidents():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, content, created_at FROM incidents ORDER BY created_at DESC"
+        "SELECT id, content, category, created_at FROM incidents ORDER BY created_at DESC"
     ).fetchall()
     conn.close()
     results = []
@@ -71,7 +87,7 @@ def get_incident_by_id(incident_id):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT id, content, summary, created_at FROM incidents WHERE id = ?",
+        "SELECT id, content, summary, category, created_at FROM incidents WHERE id = ?",
         (incident_id,),
     ).fetchone()
     conn.close()

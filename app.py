@@ -16,6 +16,52 @@ def summarize(text):
     return " ".join(meaningful[:3])
 
 
+# F5: keyword lists for incident classification.
+# Each category maps to a list of lowercase keywords matched against
+# the incident text. Score = count of keyword matches; highest wins.
+KEYWORDS = {
+    "Network": [
+        "vpn", "firewall", "dns", "router", "network", "connectivity",
+        "bandwidth", "latency", "gateway", "switch", "lan", "wan", "isp",
+    ],
+    "Database": [
+        "database", "mysql", "postgres", "query", "timeout", "connection",
+        "oracle", "sql", "deadlock", "replication", "tns", "listener",
+    ],
+    "Security": [
+        "attack", "malware", "phishing", "unauthorized", "breach",
+        "vulnerability", "ddos", "intrusion", "ransomware", "hack",
+        "compromise", "exploit", "brute force",
+    ],
+    "Infrastructure": [
+        "cpu", "memory", "disk", "server", "vm", "storage", "kubernetes",
+        "container", "hardware", "node", "cluster", "load balancer",
+    ],
+    "Application": [
+        "application", "api", "deployment", "service", "frontend",
+        "backend", "crash", "bug", "error 500", "exception", "restart",
+        "rollback", "web", "mobile",
+    ],
+}
+
+
+def classify(text):
+    """
+    Classify an incident into one of five categories via keyword scoring.
+    Input:  incident content string
+    Output: category name string (e.g. "Network")
+    Falls back to "Application" when no keyword matches.
+    """
+    lower = text.lower()
+    scores = {cat: 0 for cat in KEYWORDS}
+    for cat, words in KEYWORDS.items():
+        for w in words:
+            if w in lower:
+                scores[cat] += 1
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else "Others"
+
+
 st.title("Smart Incident Manager")
 st.caption("Submit an IT incident report.")
 
@@ -69,6 +115,9 @@ if st.button("Submit Incident"):
     # F4: generate and store summary
     db.update_summary(incident_id, summarize(text))
 
+    # F5: classify and store category
+    db.update_category(incident_id, classify(text))
+
     st.success(
         f"Incident #{incident_id} saved. "
         f"Text length: {len(text)} characters."
@@ -85,7 +134,8 @@ if not incidents:
 else:
     options = {}
     for inc in incidents:
-        label = f"#{inc['id']} | {inc['created_at'][:19]} | {inc['preview']}..."
+        cat = inc.get("category") or "?"
+        label = f"#{inc['id']} | [{cat}] | {inc['created_at'][:19]} | {inc['preview']}..."
         options[label] = inc['id']
 
     selected = st.selectbox(
@@ -97,14 +147,15 @@ else:
     incident = db.get_incident_by_id(selected_id)
 
     if incident:
+        cat = incident.get("category") or "?"
+
         st.caption(
-            f"Incident #{incident['id']} | {incident['created_at']}"
+            f"Incident #{incident['id']} | [{cat}] | {incident['created_at']}"
         )
 
         # F4: display summary (generate for legacy incidents)
         summary = incident.get("summary")
         if not summary:
-            import re
             sentences = re.split(r"(?<=[.!?])\s+", incident["content"].strip())
             meaningful = [s.strip() for s in sentences if len(s.strip()) > 5]
             summary = " ".join(meaningful[:3])
