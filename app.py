@@ -60,3 +60,31 @@ if st.button("Submit Incident"):
         f"Incident #{incident_id} saved. "
         f"Text length: {len(text)} characters."
     )
+
+
+st.divider()
+st.subheader("Incident History")
+
+incidents = db.get_all_incidents()
+
+if not incidents:
+    st.info("No incidents found.")
+else:
+    options = {}
+    for inc in incidents:
+        label = f"#{inc['id']} | {inc['created_at'][:19]} | {inc['preview']}..."
+        options[label] = inc['id']
+
+    selected = st.selectbox(
+        "Select an incident to view details",
+        list(options.keys()),
+    )
+
+    selected_id = options[selected]
+    incident = db.get_incident_by_id(selected_id)
+
+    if incident:
+        st.caption(
+            f"Incident #{incident['id']}  |  {incident['created_at']}"
+        )
+        st.text(incident["content"])
