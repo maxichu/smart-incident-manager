@@ -25,7 +25,6 @@ def init_db():
         ("severity", "TEXT"),
         ("severity_score", "INTEGER"),
         ("recommendations", "TEXT"),
-        # F10: audit metadata
         ("analyzed_at", "TIMESTAMP"),
         ("analysis_version", "TEXT"),
     ]:
@@ -33,7 +32,6 @@ def init_db():
             conn.execute(f"ALTER TABLE incidents ADD COLUMN {col} {col_type}")
         except sqlite3.OperationalError:
             pass
-    # F3: FTS5 virtual table with trigram tokenizer (external content)
     conn.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS incidents_fts USING fts5(
             content,
@@ -67,8 +65,6 @@ def insert_incident(content):
     return incident_id
 
 
-# F10: centralized analysis persistence ¡ª single function replaces
-# update_summary/update_category/update_severity/update_recommendations.
 def save_analysis(incident_id, **kwargs):
     """Persist one or more analysis fields for an incident.  Sets analyzed_at."""
     allowed = {
@@ -88,6 +84,88 @@ def save_analysis(incident_id, **kwargs):
         f"UPDATE incidents SET {', '.join(sets)} WHERE id = ?",
         values + [incident_id],
     )
+    conn.commit()
+    conn.close()
+
+
+# F12: aggregate trend statistics for the dashboard.
+def get_trend_stats():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    total = conn.execute("SELECT COUNT(*) AS cnt FROM incidents").fetchone()["cnt"]
+    by_category = conn.execute(
+        "SELECT COALESCE(category, 'Unknown') AS category, COUNT(*) AS cnt "
+        "FROM incidents GROUP BY category ORDER BY cnt DESC"
+    ).fetchall()
+    by_severity = conn.execute(
+        "SELECT COALESCE(severity, 'Unknown') AS severity, COUNT(*) AS cnt "
+        "FROM incidents GROUP BY severity "
+        "ORDER BY CASE severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 "
+        "WHEN 'Medium' THEN 3 WHEN 'Low' THEN 4 ELSE 5 END"
+    ).fetchall()
+    by_week = conn.execute("""
+        SELECT strftime('%Y-W%W', created_at) AS week, COUNT(*) AS cnt
+        FROM incidents GROUP BY week ORDER BY week
+    """).fetchall()
+    conn.close()
+    return {
+        "total": total,
+        "by_category": [dict(r) for r in by_category],
+        "by_severity": [dict(r) for r in by_severity],
+        "by_week": [dict(r) for r in by_week],
+    }
+
+
+# F12: generate ~30 sample incidents spread over 30 days for demo trends.
+def load_sample_trends():
+    import random
+    from datetime import datetime, timedelta
+
+    conn = sqlite3.connect(DB_PATH)
+    count = conn.execute("SELECT COUNT(*) FROM incidents").fetchone()[0]
+    if count > 15:
+        conn.close()
+        return
+
+    templates = [
+        ("Network", "VPN connectivity issue reported by remote users.", "Medium"),
+        ("Network", "Firewall blocking legitimate traffic after update.", "High"),
+        ("Network", "DNS resolution failure affecting internal services.", "Medium"),
+        ("Database", "Slow query performance on production database.", "Medium"),
+        ("Database", "Database replication lag exceeding threshold.", "High"),
+        ("Database", "Connection pool exhausted during peak hours.", "High"),
+        ("Security", "Multiple failed login attempts from external IP.", "High"),
+        ("Security", "Phishing email campaign targeting employees.", "Critical"),
+        ("Security", "Unauthorized access to internal file server.", "Critical"),
+        ("Infrastructure", "Server CPU usage spiking intermittently.", "Medium"),
+        ("Infrastructure", "Disk space reaching critical levels on log server.", "High"),
+        ("Infrastructure", "Memory leak detected in production container.", "High"),
+        ("Application", "API response time degraded after deployment.", "Medium"),
+        ("Application", "Web service returning 500 errors intermittently.", "High"),
+        ("Application", "Frontend deployment rolled back due to bug.", "Medium"),
+    ]
+
+    sev_score = {"Low": 1, "Medium": 2, "High": 3, "Critical": 4}
+    now = datetime.now()
+
+    for i in range(30):
+        t = random.choice(templates)
+        days_ago = random.randint(0, 29)
+        ts = (now - timedelta(days=days_ago)).strftime("%Y-%m-%d %H:%M:%S")
+        content = f"[{ts}] {t[1]}"
+
+        cursor = conn.execute(
+            "INSERT INTO incidents (content, category, severity, severity_score, summary, recommendations, created_at, analyzed_at, analysis_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                content, t[0], t[2], sev_score[t[2]],
+                content[:100], "[]",
+                ts, ts, "1.0",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO incidents_fts(rowid, content) VALUES (?, ?)",
+            (cursor.lastrowid, content),
+        )
     conn.commit()
     conn.close()
 

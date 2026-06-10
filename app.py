@@ -313,3 +313,31 @@ else:
             st.success(body)
 
         st.text(incident["content"])
+
+
+# F12: generate sample trend data on first run
+db.load_sample_trends()
+
+st.divider()
+st.subheader("Trend Analysis")
+
+stats = db.get_trend_stats()
+
+# F12: overview metrics and distribution charts
+c1, c2 = st.columns(2)
+c1.metric("Total Incidents", stats["total"])
+c2.metric("Categories", len(stats["by_category"]))
+
+col1, col2 = st.columns(2)
+with col1:
+    st.caption("Category Distribution")
+    if stats["by_category"]:
+        st.bar_chart({r["category"]: r["cnt"] for r in stats["by_category"]})
+with col2:
+    st.caption("Severity Distribution")
+    if stats["by_severity"]:
+        st.bar_chart({r["severity"]: r["cnt"] for r in stats["by_severity"]})
+
+st.caption("Weekly Incident Trend")
+if stats["by_week"]:
+    st.line_chart({r["week"]: r["cnt"] for r in stats["by_week"]})
