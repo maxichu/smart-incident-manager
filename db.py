@@ -37,6 +37,20 @@ def init_db():
         conn.execute("ALTER TABLE incidents ADD COLUMN severity_score INTEGER")
     except sqlite3.OperationalError:
         pass
+    # F3: FTS5 virtual table with trigram tokenizer (external content)
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS incidents_fts USING fts5(
+            content,
+            content='incidents',
+            content_rowid='id',
+            tokenize='trigram'
+        )
+    """)
+    # F3: migrate existing incidents into FTS (idempotent)
+    conn.execute("""
+        INSERT OR IGNORE INTO incidents_fts(rowid, content)
+        SELECT id, content FROM incidents
+    """)
     conn.commit()
     conn.close()
 
@@ -48,8 +62,13 @@ def insert_incident(content):
         "INSERT INTO incidents (content) VALUES (?)",
         (safe,),
     )
-    conn.commit()
     incident_id = cursor.lastrowid
+    # F3: sync to FTS index
+    conn.execute(
+        "INSERT INTO incidents_fts(rowid, content) VALUES (?, ?)",
+        (incident_id, safe),
+    )
+    conn.commit()
     conn.close()
     return incident_id
 
@@ -84,6 +103,28 @@ def update_severity(incident_id, severity, score):
     )
     conn.commit()
     conn.close()
+
+
+# F3: full-text search with FTS5 trigram, bm25 ranking, SQLite snippet highlighting
+def search_incidents(query):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    safe = "".join(c for c in query if c.isalnum() or c.isspace()).strip()
+    if not safe:
+        conn.close()
+        return []
+    rows = conn.execute("""
+        SELECT
+            i.id, i.category, i.severity, i.created_at,
+            snippet(incidents_fts, 0, '<mark>', '</mark>', '...', 40) AS snippet
+        FROM incidents_fts f
+        JOIN incidents i ON f.rowid = i.id
+        WHERE incidents_fts MATCH ?
+        ORDER BY bm25(incidents_fts)
+        LIMIT 50
+    """, (safe,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def get_all_incidents():

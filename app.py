@@ -59,7 +59,6 @@ def classify(text):
 
 
 # F6: severity keyword weights.
-# Each keyword maps to a numeric weight. Summed score mapped to level.
 SEVERITY_KEYWORDS = {
     4: ["outage", "down", "breach", "data loss", "ransomware", "critical"],
     3: ["unavailable", "timeout", "crash", "failure", "attack", "95%"],
@@ -71,8 +70,6 @@ SEVERITY_KEYWORDS = {
 def score_severity(text):
     """
     Score severity via weighted keyword matching.
-    Input:  incident content string
-    Output: (severity_level, score) tuple
     Uses max-keyword-weight mapping per F6 test cases.
     """
     lower = text.lower()
@@ -157,6 +154,44 @@ if st.button("Submit Incident"):
         f"Text length: {len(text)} characters."
     )
 
+
+
+def highlight_content(content, query):
+    """Wrap all occurrences of query in content with <mark> tags (case-insensitive)."""
+    if not query or not content:
+        return content
+    pattern = "(" + "|".join(__import__("re").escape(w) for w in query.split() if len(w) >= 3) + ")"
+    return re.sub(pattern, lambda m: "<mark>" + m.group(1) + "</mark>", content, flags=re.IGNORECASE)
+
+
+st.divider()
+st.subheader("Search Incidents")
+
+search_query = st.text_input("Search", placeholder="e.g. database timeout...")
+
+if search_query.strip():
+    results = db.search_incidents(search_query)
+    if not results:
+        st.info("No matching incidents found.")
+    else:
+        st.caption(f"{len(results)} result(s)")
+        for res in results:
+            cat = res.get("category") or "?"
+            sev = res.get("severity") or "?"
+            header = f"#{res['id']} | [{cat}] [{sev}] | {res['created_at'][:19]}"
+            with st.expander(header):
+                st.markdown(res["snippet"], unsafe_allow_html=True)
+                detail = db.get_incident_by_id(res["id"])
+                if detail:
+                    summary = detail.get("summary")
+                    if not summary:
+                        import re
+                        sentences = re.split(r"(?<=[.!?])\s+", detail["content"].strip())
+                        meaningful = [s.strip() for s in sentences if len(s.strip()) > 5]
+                        summary = " ".join(meaningful[:3])
+                        db.update_summary(detail["id"], summary)
+                    st.info(f"**Summary**: {summary}")
+                    st.markdown(highlight_content(detail["content"], search_query), unsafe_allow_html=True)
 
 st.divider()
 st.subheader("Incident History")
