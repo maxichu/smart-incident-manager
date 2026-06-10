@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 from io import BytesIO
 import pdfplumber
@@ -6,6 +7,14 @@ import db
 st.set_page_config(page_title="Smart Incident Manager", layout="centered")
 
 db.init_db()
+
+
+def summarize(text):
+    """Return the first 3 non-trivial sentences from text (Lead-3)."""
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    meaningful = [s.strip() for s in sentences if len(s.strip()) > 5]
+    return " ".join(meaningful[:3])
+
 
 st.title("Smart Incident Manager")
 st.caption("Submit an IT incident report.")
@@ -56,6 +65,10 @@ if st.button("Submit Incident"):
         st.stop()
 
     incident_id = db.insert_incident(text)
+
+    # F4: generate and store summary
+    db.update_summary(incident_id, summarize(text))
+
     st.success(
         f"Incident #{incident_id} saved. "
         f"Text length: {len(text)} characters."
@@ -85,6 +98,17 @@ else:
 
     if incident:
         st.caption(
-            f"Incident #{incident['id']}  |  {incident['created_at']}"
+            f"Incident #{incident['id']} | {incident['created_at']}"
         )
+
+        # F4: display summary (generate for legacy incidents)
+        summary = incident.get("summary")
+        if not summary:
+            import re
+            sentences = re.split(r"(?<=[.!?])\s+", incident["content"].strip())
+            meaningful = [s.strip() for s in sentences if len(s.strip()) > 5]
+            summary = " ".join(meaningful[:3])
+            db.update_summary(incident["id"], summary)
+        st.info(f"**Summary**: {summary}")
+
         st.text(incident["content"])

@@ -18,6 +18,11 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # F4: add summary column if missing
+    try:
+        conn.execute("ALTER TABLE incidents ADD COLUMN summary TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -33,6 +38,16 @@ def insert_incident(content):
     incident_id = cursor.lastrowid
     conn.close()
     return incident_id
+
+
+def update_summary(incident_id, summary):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE incidents SET summary = ? WHERE id = ?",
+        (summary, incident_id),
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_all_incidents():
@@ -56,7 +71,7 @@ def get_incident_by_id(incident_id):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT id, content, created_at FROM incidents WHERE id = ?",
+        "SELECT id, content, summary, created_at FROM incidents WHERE id = ?",
         (incident_id,),
     ).fetchone()
     conn.close()
@@ -64,4 +79,6 @@ def get_incident_by_id(incident_id):
         return None
     d = dict(row)
     d["content"] = _sanitize(d["content"])
+    if d.get("summary"):
+        d["summary"] = _sanitize(d["summary"])
     return d
