@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import json
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "incidents.db")
 
@@ -35,6 +36,11 @@ def init_db():
         pass
     try:
         conn.execute("ALTER TABLE incidents ADD COLUMN severity_score INTEGER")
+    except sqlite3.OperationalError:
+        pass
+    # F7: add recommendations column if missing
+    try:
+        conn.execute("ALTER TABLE incidents ADD COLUMN recommendations TEXT")
     except sqlite3.OperationalError:
         pass
     # F3: FTS5 virtual table with trigram tokenizer (external content)
@@ -105,6 +111,17 @@ def update_severity(incident_id, severity, score):
     conn.close()
 
 
+# F7: persist recommendations as JSON array
+def update_recommendations(incident_id, actions):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE incidents SET recommendations = ? WHERE id = ?",
+        (json.dumps(actions), incident_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 # F3: full-text search with FTS5 trigram, bm25 ranking, SQLite snippet highlighting
 def search_incidents(query):
     conn = sqlite3.connect(DB_PATH)
@@ -148,7 +165,7 @@ def get_incident_by_id(incident_id):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT id, content, summary, category, severity, severity_score, created_at FROM incidents WHERE id = ?",
+        "SELECT id, content, summary, category, severity, severity_score, recommendations, created_at FROM incidents WHERE id = ?",
         (incident_id,),
     ).fetchone()
     conn.close()
@@ -158,4 +175,12 @@ def get_incident_by_id(incident_id):
     d["content"] = _sanitize(d["content"])
     if d.get("summary"):
         d["summary"] = _sanitize(d["summary"])
+    # F7: parse recommendations JSON back to list
+    if d.get("recommendations"):
+        try:
+            d["recommendations"] = json.loads(d["recommendations"])
+        except (json.JSONDecodeError, TypeError):
+            d["recommendations"] = []
+    else:
+        d["recommendations"] = []
     return d

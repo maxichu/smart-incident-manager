@@ -89,6 +89,76 @@ def score_severity(text):
         return ("Low", max_weight)
 
 
+# F7: category-keyword playbook for action recommendations.
+# Structure: category -> keyword -> list of recommended actions.
+PLAYBOOK = {
+    "Network": {
+        "vpn": ["Verify VPN gateway", "Check firewall rules", "Restart VPN service"],
+        "dns": ["Verify DNS records", "Check DNS server health", "Flush DNS cache"],
+        "firewall": ["Verify firewall policy", "Check blocked connections", "Review security rules"],
+        "connectivity": ["Check network connectivity", "Verify ISP status", "Inspect network hardware"],
+        "latency": ["Measure network latency", "Check bandwidth usage", "Review routing tables"],
+        "gateway": ["Verify gateway status", "Check gateway configuration", "Restart gateway service"],
+    },
+    "Database": {
+        "timeout": ["Check slow query logs", "Inspect connection pool", "Escalate to DBA"],
+        "replication": ["Verify replication status", "Check database synchronization", "Escalate to DBA"],
+        "connection": ["Verify database connectivity", "Review connection limits", "Restart connection pool"],
+        "query": ["Analyze query performance", "Check query execution plan", "Consider indexing"],
+        "deadlock": ["Identify deadlock source", "Review transaction isolation", "Escalate to DBA"],
+    },
+    "Security": {
+        "breach": ["Escalate to security team", "Review access logs", "Isolate affected systems"],
+        "attack": ["Review attack indicators", "Verify firewall protection", "Escalate immediately"],
+        "unauthorized": ["Review user permissions", "Check authentication logs", "Reset compromised credentials"],
+        "malware": ["Run malware scan", "Isolate infected systems", "Escalate to security team"],
+        "phishing": ["Investigate phishing source", "Notify affected users", "Block malicious domains"],
+    },
+    "Infrastructure": {
+        "cpu": ["Identify top processes", "Check resource utilization", "Consider scaling resources"],
+        "memory": ["Review memory consumption", "Check for memory leaks", "Restart affected service"],
+        "disk": ["Check disk usage", "Remove unnecessary files", "Expand storage if required"],
+        "server": ["Verify server health", "Check system logs", "Restart server if needed"],
+        "storage": ["Check storage capacity", "Verify storage performance", "Consider expanding storage"],
+    },
+    "Application": {
+        "deployment": ["Roll back deployment", "Review deployment logs", "Verify service health"],
+        "api": ["Check API logs", "Verify upstream dependencies", "Restart affected service"],
+        "error": ["Inspect application logs", "Review recent changes", "Escalate to application team"],
+        "crash": ["Check crash logs", "Identify root cause", "Restart application"],
+        "bug": ["Review bug report", "Verify fix deployment", "Escalate to development team"],
+    },
+}
+
+# F7: category-level fallback actions when no keyword matches.
+CATEGORY_FALLBACKS = {
+    "Network": ["Verify connectivity", "Review logs", "Escalate to network team"],
+    "Database": ["Review database logs", "Verify service status", "Escalate to DBA"],
+    "Infrastructure": ["Review system metrics", "Verify resource health", "Escalate to infrastructure team"],
+    "Application": ["Review application logs", "Verify service health", "Escalate to application team"],
+    "Security": ["Review security logs", "Investigate suspicious activity", "Escalate to security team"],
+    "Others": ["Investigate issue", "Review logs", "Escalate to appropriate team"],
+}
+
+# F7: generic fallback when category is unavailable.
+GENERIC_FALLBACK = ["Investigate issue", "Review logs", "Escalate to appropriate team"]
+
+
+def recommend(content, category):
+    """
+    Generate action recommendations based on category and keyword matching.
+    Input:  incident content string, category string
+    Output: list of action strings
+    Falls back to category-level actions, then generic fallback.
+    """
+    lower = content.lower()
+    playbook = PLAYBOOK.get(category, {})
+    for keyword, actions in playbook.items():
+        if keyword in lower:
+            return actions
+    return CATEGORY_FALLBACKS.get(category, GENERIC_FALLBACK)
+
+
 st.title("Smart Incident Manager")
 st.caption("Submit an IT incident report.")
 
@@ -148,6 +218,9 @@ if st.button("Submit Incident"):
     # F6: score severity and store level + score
     sev, score = score_severity(text)
     db.update_severity(incident_id, sev, score)
+
+    # F7: generate and store recommendations
+    db.update_recommendations(incident_id, recommend(text, classify(text)))
 
     st.success(
         f"Incident #{incident_id} saved. "
@@ -232,5 +305,11 @@ else:
             summary = " ".join(meaningful[:3])
             db.update_summary(incident["id"], summary)
         st.info(f"**Summary**: {summary}")
+
+        # F7: display recommendations in a green box
+        recs = incident.get("recommendations", [])
+        if recs:
+            body = "**Recommended Actions**\n" + "\n".join(f"- {a}" for a in recs)
+            st.success(body)
 
         st.text(incident["content"])
