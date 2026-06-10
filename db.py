@@ -19,30 +19,20 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # F4: add summary column if missing
-    try:
-        conn.execute("ALTER TABLE incidents ADD COLUMN summary TEXT")
-    except sqlite3.OperationalError:
-        pass
-    # F5: add category column if missing
-    try:
-        conn.execute("ALTER TABLE incidents ADD COLUMN category TEXT")
-    except sqlite3.OperationalError:
-        pass
-    # F6: add severity columns if missing
-    try:
-        conn.execute("ALTER TABLE incidents ADD COLUMN severity TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        conn.execute("ALTER TABLE incidents ADD COLUMN severity_score INTEGER")
-    except sqlite3.OperationalError:
-        pass
-    # F7: add recommendations column if missing
-    try:
-        conn.execute("ALTER TABLE incidents ADD COLUMN recommendations TEXT")
-    except sqlite3.OperationalError:
-        pass
+    for col, col_type in [
+        ("summary", "TEXT"),
+        ("category", "TEXT"),
+        ("severity", "TEXT"),
+        ("severity_score", "INTEGER"),
+        ("recommendations", "TEXT"),
+        # F10: audit metadata
+        ("analyzed_at", "TIMESTAMP"),
+        ("analysis_version", "TEXT"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE incidents ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass
     # F3: FTS5 virtual table with trigram tokenizer (external content)
     conn.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS incidents_fts USING fts5(
@@ -52,7 +42,6 @@ def init_db():
             tokenize='trigram'
         )
     """)
-    # F3: migrate existing incidents into FTS (idempotent)
     conn.execute("""
         INSERT OR IGNORE INTO incidents_fts(rowid, content)
         SELECT id, content FROM incidents
@@ -69,7 +58,6 @@ def insert_incident(content):
         (safe,),
     )
     incident_id = cursor.lastrowid
-    # F3: sync to FTS index
     conn.execute(
         "INSERT INTO incidents_fts(rowid, content) VALUES (?, ?)",
         (incident_id, safe),
@@ -79,50 +67,31 @@ def insert_incident(content):
     return incident_id
 
 
-def update_summary(incident_id, summary):
+# F10: centralized analysis persistence ¡ª single function replaces
+# update_summary/update_category/update_severity/update_recommendations.
+def save_analysis(incident_id, **kwargs):
+    """Persist one or more analysis fields for an incident.  Sets analyzed_at."""
+    allowed = {
+        "summary", "category", "severity", "severity_score",
+        "recommendations", "analysis_version",
+    }
+    fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not fields:
+        return
+    if "recommendations" in fields:
+        fields["recommendations"] = json.dumps(fields["recommendations"])
+    sets = [f"{k} = ?" for k in fields]
+    values = list(fields.values())
+    sets.append("analyzed_at = CURRENT_TIMESTAMP")
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "UPDATE incidents SET summary = ? WHERE id = ?",
-        (summary, incident_id),
+        f"UPDATE incidents SET {', '.join(sets)} WHERE id = ?",
+        values + [incident_id],
     )
     conn.commit()
     conn.close()
 
 
-# F5: persist the classification result
-def update_category(incident_id, category):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "UPDATE incidents SET category = ? WHERE id = ?",
-        (category, incident_id),
-    )
-    conn.commit()
-    conn.close()
-
-
-# F6: persist severity level and numeric score
-def update_severity(incident_id, severity, score):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "UPDATE incidents SET severity = ?, severity_score = ? WHERE id = ?",
-        (severity, score, incident_id),
-    )
-    conn.commit()
-    conn.close()
-
-
-# F7: persist recommendations as JSON array
-def update_recommendations(incident_id, actions):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "UPDATE incidents SET recommendations = ? WHERE id = ?",
-        (json.dumps(actions), incident_id),
-    )
-    conn.commit()
-    conn.close()
-
-
-# F3: full-text search with FTS5 trigram, bm25 ranking, SQLite snippet highlighting
 def search_incidents(query):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -175,7 +144,6 @@ def get_incident_by_id(incident_id):
     d["content"] = _sanitize(d["content"])
     if d.get("summary"):
         d["summary"] = _sanitize(d["summary"])
-    # F7: parse recommendations JSON back to list
     if d.get("recommendations"):
         try:
             d["recommendations"] = json.loads(d["recommendations"])

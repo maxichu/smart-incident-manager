@@ -209,18 +209,18 @@ if st.button("Submit Incident"):
 
     incident_id = db.insert_incident(text)
 
-    # F4: generate and store summary
-    db.update_summary(incident_id, summarize(text))
-
-    # F5: classify and store category
-    db.update_category(incident_id, classify(text))
-
-    # F6: score severity and store level + score
+    # F10: persist all analysis at once via centralized layer
     sev, score = score_severity(text)
-    db.update_severity(incident_id, sev, score)
-
-    # F7: generate and store recommendations
-    db.update_recommendations(incident_id, recommend(text, classify(text)))
+    recs = recommend(text, classify(text))
+    db.save_analysis(
+        incident_id,
+        summary=summarize(text),
+        category=classify(text),
+        severity=sev,
+        severity_score=score,
+        recommendations=recs,
+        analysis_version="1.0",
+    )
 
     st.success(
         f"Incident #{incident_id} saved. "
@@ -262,7 +262,7 @@ if search_query.strip():
                         sentences = re.split(r"(?<=[.!?])\s+", detail["content"].strip())
                         meaningful = [s.strip() for s in sentences if len(s.strip()) > 5]
                         summary = " ".join(meaningful[:3])
-                        db.update_summary(detail["id"], summary)
+                        db.save_analysis(detail["id"], summary=summary)
                     st.info(f"**Summary**: {summary}")
                     st.markdown(highlight_content(detail["content"], search_query), unsafe_allow_html=True)
 
@@ -303,7 +303,7 @@ else:
             sentences = re.split(r"(?<=[.!?])\s+", incident["content"].strip())
             meaningful = [s.strip() for s in sentences if len(s.strip()) > 5]
             summary = " ".join(meaningful[:3])
-            db.update_summary(incident["id"], summary)
+            db.save_analysis(incident["id"], summary=summary)
         st.info(f"**Summary**: {summary}")
 
         # F7: display recommendations in a green box
