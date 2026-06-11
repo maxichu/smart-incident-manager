@@ -1,12 +1,18 @@
 import re
+import json
 import streamlit as st
 from io import BytesIO
 import pdfplumber
 import db
+import llm
 
 st.set_page_config(page_title="Smart Incident Manager", layout="centered")
 
 db.init_db()
+
+# F8: conversation history in session state
+if "qa_messages" not in st.session_state:
+    st.session_state.qa_messages = []
 
 
 def summarize(text):
@@ -159,6 +165,154 @@ def recommend(content, category):
     return CATEGORY_FALLBACKS.get(category, GENERIC_FALLBACK)
 
 
+
+# F8: extract keywords from questions for FTS5 search with OR semantics.
+# Natural-language questions contain stop words and verb modifiers that
+# will never match incident content under AND semantics.
+_STOP = {
+    "what", "is", "the", "a", "an", "are", "was", "were", "be", "been",
+    "being", "have", "has", "had", "do", "does", "did", "will", "would",
+    "can", "could", "i", "you", "he", "she", "it", "we", "they", "me",
+    "him", "her", "us", "them", "my", "your", "his", "its", "our", "their",
+    "this", "that", "these", "those", "who", "whom", "which", "where",
+    "when", "why", "how", "about", "any", "some", "all", "both", "each",
+    "every", "few", "more", "most", "other", "first", "last", "not", "no",
+    "yes", "tell", "explain", "describe", "find", "show", "give", "list",
+    "get", "let", "know", "please", "there", "here", "just", "now",
+}
+
+
+def _qa_search(question):
+    """Extract keywords (OR semantics) and detect incident ID references."""
+    import re
+    results = []
+    # Detect #N / case #N / incident #N and fetch directly
+    for m in re.finditer(r"#(\d+)", question):
+        inc = db.get_incident_by_id(int(m.group(1)))
+        if inc:
+            results.append(inc)
+    # Extract keywords, OR semantic search
+    safe = "".join(c for c in question if c.isalnum() or c.isspace()).strip()
+    if safe:
+        words = safe.lower().split()
+        keywords = [w for w in words if w not in _STOP and len(w) >= 3]
+        if keywords:
+            ft_results = db.search_incidents(" OR ".join(keywords))
+            # Merge ID results first, then FTS results (deduplicate by id)
+            seen = {r["id"] for r in results}
+            for r in ft_results:
+                if r["id"] not in seen:
+                    results.append(r)
+                    seen.add(r["id"])
+    return results[:5]
+
+
+# F8: RAG QA - retrieves relevant incidents via FTS5, builds context, calls LLM.
+def answer_question(question, history):
+    """Generate an answer from retrieved incidents and conversation history."""
+    results = _qa_search(question)
+
+    contexts = []
+    for r in results[:5]:
+        detail = db.get_incident_by_id(r["id"])
+        if not detail:
+            continue
+        cat = detail.get("category") or "?"
+        sev = detail.get("severity") or "?"
+        content = detail["content"][:300]
+        contexts.append(
+            f"[Incident #{detail['id']}] Category: {cat}, Severity: {sev}\n{content}"
+        )
+
+    if not contexts:
+        # Fallback: use 5 most recent incidents when FTS5 finds nothing
+        recent = db.get_all_incidents()[:5]
+        for inc in recent:
+            detail = db.get_incident_by_id(inc["id"])
+            if detail:
+                cat = detail.get("category") or "?"
+                sev = detail.get("severity") or "?"
+                content = detail["content"][:300]
+                contexts.append(
+                    f"[Incident #{detail['id']}] Category: {cat}, Severity: {sev}\n{content}"
+                )
+
+    context_text = "\n\n".join(contexts)
+
+    recent = "\n".join(
+        f"{m['role'].capitalize()}: {m['content']}"
+        for m in history[-6:]
+    )
+
+    system_prompt = (
+        "You are an IT incident analyst. Answer questions based ONLY on "
+        "the provided incident reports. If the answer cannot be determined, "
+        "say 'Not enough information available.' Be concise. No explanations."
+    )
+
+    user_prompt = (
+        f"Conversation history:\n{recent}\n\n"
+        f"Incident reports:\n{context_text}\n\n"
+        f"Question: {question}\n\nAnswer:"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    return llm.chat(messages)
+
+
+# F9: two-stage citation retrieval - broad candidate fetch + LLM reranking.
+def find_citations(question):
+    """Return up to 5 most relevant incidents for a question via LLM reranking."""
+    candidates = db.get_recent_summaries(50)
+    if not candidates:
+        return []
+
+    lines = []
+    for inc in candidates:
+        cat = inc.get("category") or "?"
+        sev = inc.get("severity") or "?"
+        summary = (inc.get("summary") or "")[:120]
+        lines.append(f"#{inc['id']} ({cat}, {sev}): {summary}")
+
+    system_prompt = (
+        "You are a citation finder. Given a question and a list of incidents, "
+        "select up to 5 incident IDs most relevant to the question. "
+        "Return ONLY a JSON array of IDs: [id1, id2, id3]. "
+        "If no incidents are relevant, return []."
+    )
+
+    user_prompt = (
+        f"Question: {question}\n\n"
+        f"Incidents:\n" + "\n".join(lines) + "\n\n"
+        "Relevant IDs (JSON array, max 5):"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    response = llm.chat(messages)
+
+    import re
+    ids = []
+    try:
+        parsed = json.loads(response)
+        if isinstance(parsed, list):
+            ids = [int(i) for i in parsed[:5]]
+    except (json.JSONDecodeError, ValueError, TypeError):
+        ids = [int(m) for m in re.findall(r"\d+", response)][:5]
+
+    results = []
+    for cid in ids:
+        inc = db.get_incident_by_id(cid)
+        if inc:
+            results.append(inc)
+    return results
+
+
 st.title("Smart Incident Manager")
 st.caption("Submit an IT incident report.")
 
@@ -265,6 +419,61 @@ if search_query.strip():
                         db.save_analysis(detail["id"], summary=summary)
                     st.info(f"**Summary**: {summary}")
                     st.markdown(highlight_content(detail["content"], search_query), unsafe_allow_html=True)
+
+
+
+st.divider()
+st.subheader("QA Assistant")
+
+# F8: conversation history display
+for msg in st.session_state.qa_messages:
+    if msg["role"] == "user":
+        st.markdown(f"**You:** {msg['content']}")
+    else:
+        st.markdown(f"**Assistant:** {msg['content']}")
+
+# F8: question input
+question = st.text_input("Ask a question about incidents", key="qa_question")
+if st.button("Ask", key="qa_ask"):
+    if question.strip():
+        st.session_state.qa_messages.append(
+            {"role": "user", "content": question}
+        )
+        with st.spinner("Analyzing..."):
+            answer = answer_question(
+                question, st.session_state.qa_messages[:-1]
+            )
+        st.session_state.qa_messages.append(
+            {"role": "assistant", "content": answer}
+        )
+        st.rerun()
+
+
+st.divider()
+st.subheader("Citation Finder")
+
+# F9: question input for citation retrieval
+cite_q = st.text_input("Question to find relevant incidents", key="cite_q")
+if st.button("Find Citations", key="cite_btn"):
+    if cite_q.strip():
+        with st.spinner("Searching with LLM reranking..."):
+            cites = find_citations(cite_q)
+        if cites:
+            st.markdown("**Sources**")
+            for inc in cites:
+                cat = inc.get("category") or "?"
+                sev = inc.get("severity") or "?"
+                summary = inc.get("summary") or inc["content"][:100]
+                st.markdown(
+                    f"- **Incident #{inc['id']}** [{cat}] [{sev}]: {summary}"
+                )
+                with st.expander("View"):
+                    st.text(inc["content"])
+        else:
+            st.info("No relevant incidents found.")
+    else:
+        st.warning("Please enter a question.")
+
 
 st.divider()
 st.subheader("Incident History")

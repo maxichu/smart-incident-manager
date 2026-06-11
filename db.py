@@ -88,7 +88,19 @@ def save_analysis(incident_id, **kwargs):
     conn.close()
 
 
-# F12: aggregate trend statistics for the dashboard.
+# F9: lightweight fetch for citation candidate set (no full content).
+def get_recent_summaries(limit=50):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, category, severity, summary, created_at FROM incidents "
+        "ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_trend_stats():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -116,7 +128,6 @@ def get_trend_stats():
     }
 
 
-# F12: generate ~30 sample incidents spread over 30 days for demo trends.
 def load_sample_trends():
     import random
     from datetime import datetime, timedelta
