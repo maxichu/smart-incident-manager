@@ -169,48 +169,10 @@ def recommend(content, category):
 # F8: extract keywords from questions for FTS5 search with OR semantics.
 # Natural-language questions contain stop words and verb modifiers that
 # will never match incident content under AND semantics.
-_STOP = {
-    "what", "is", "the", "a", "an", "are", "was", "were", "be", "been",
-    "being", "have", "has", "had", "do", "does", "did", "will", "would",
-    "can", "could", "i", "you", "he", "she", "it", "we", "they", "me",
-    "him", "her", "us", "them", "my", "your", "his", "its", "our", "their",
-    "this", "that", "these", "those", "who", "whom", "which", "where",
-    "when", "why", "how", "about", "any", "some", "all", "both", "each",
-    "every", "few", "more", "most", "other", "first", "last", "not", "no",
-    "yes", "tell", "explain", "describe", "find", "show", "give", "list",
-    "get", "let", "know", "please", "there", "here", "just", "now",
-}
 
-
-def _qa_search(question):
-    """Extract keywords (OR semantics) and detect incident ID references."""
-    import re
-    results = []
-    # Detect #N / case #N / incident #N and fetch directly
-    for m in re.finditer(r"#(\d+)", question):
-        inc = db.get_incident_by_id(int(m.group(1)))
-        if inc:
-            results.append(inc)
-    # Extract keywords, OR semantic search
-    safe = "".join(c for c in question if c.isalnum() or c.isspace()).strip()
-    if safe:
-        words = safe.lower().split()
-        keywords = [w for w in words if w not in _STOP and len(w) >= 3]
-        if keywords:
-            ft_results = db.search_incidents(" OR ".join(keywords))
-            # Merge ID results first, then FTS results (deduplicate by id)
-            seen = {r["id"] for r in results}
-            for r in ft_results:
-                if r["id"] not in seen:
-                    results.append(r)
-                    seen.add(r["id"])
-    return results[:5]
-
-
-# F8: RAG QA - retrieves relevant incidents via FTS5, builds context, calls LLM.
 def answer_question(question, history):
     """Generate an answer from retrieved incidents and conversation history."""
-    results = _qa_search(question)
+    results = find_citations(question)
 
     contexts = []
     for r in results[:5]:
